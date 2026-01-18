@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2024-05-01
-**Updated:** 2026-01-16
+**Updated:** 2026-01-17
 
 ## Context
 
@@ -10,13 +10,13 @@ Need a GitOps delivery mechanism for Kubernetes. Options: Flux, ArgoCD, or manua
 
 ## Decision
 
-Use **Flux** as the GitOps delivery engine with External Secrets Operator for secrets management.
+Use **Flux** as the GitOps delivery engine with **Gitea** as the internal Git provider and External Secrets Operator for secrets management.
 
 ## Architecture
 
 ```mermaid
 flowchart TB
-    subgraph Git["Git Repositories"]
+    subgraph Gitea["Gitea (Internal Git)"]
         Components[Component Repos]
         Tenant[Tenant Repos]
     end
@@ -47,7 +47,7 @@ flowchart TB
     Source --> Helm
     Kustomize --> Resources
     Helm --> Resources
-    Notify --> Git
+    Notify --> Gitea
     ESOp --> Vault
     ESOp --> Resources
 ```
@@ -66,6 +66,7 @@ flowchart TB
 - CLI-focused fits single-developer workflow
 - Kubernetes-native CRDs
 - Works well with External Secrets Operator
+- Integrates seamlessly with Gitea
 
 ## Components
 
@@ -75,6 +76,60 @@ flowchart TB
 | kustomize-controller | 64MB | Kustomization apply |
 | helm-controller | 64MB | HelmRelease management |
 | notification-controller | 32MB | Alerts |
+
+## Gitea Integration
+
+Flux connects to Gitea repositories using Gitea access tokens:
+
+```mermaid
+flowchart LR
+    subgraph Gitea["Gitea"]
+        Repos[Repositories]
+        Actions[Gitea Actions]
+    end
+
+    subgraph K8s["Kubernetes"]
+        Flux[Flux]
+        Secret[gitea-token Secret]
+    end
+
+    Secret --> Flux
+    Flux -->|"Clone/Pull"| Repos
+    Actions -->|"Trigger"| Flux
+```
+
+### Gitea Token Secret
+
+Created during bootstrap and stored via ESO:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: gitea-token
+  namespace: flux-system
+type: Opaque
+data:
+  username: Zm... # base64 encoded
+  password: Z2l... # base64 encoded (Gitea access token)
+```
+
+### GitRepository for Gitea
+
+```yaml
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: <component>
+  namespace: flux-system
+spec:
+  interval: 5m
+  url: https://gitea.<domain>/<org>/<component>.git
+  ref:
+    branch: main
+  secretRef:
+    name: gitea-token
+```
 
 ## Secrets Management
 
@@ -105,23 +160,6 @@ See [ADR-SECRETS-MANAGEMENT](../../external-secrets/docs/ADR-SECRETS-MANAGEMENT.
 
 ## Configuration
 
-### GitRepository
-
-```yaml
-apiVersion: source.toolkit.fluxcd.io/v1
-kind: GitRepository
-metadata:
-  name: <component>
-  namespace: flux-system
-spec:
-  interval: 5m
-  url: https://github.com/openova-io/<component>
-  ref:
-    branch: main
-  secretRef:
-    name: github-token
-```
-
 ### Kustomization
 
 ```yaml
@@ -149,8 +187,10 @@ spec:
 
 ```mermaid
 flowchart TB
-    subgraph Git["Git (Single Source)"]
-        Repo[Component Repos]
+    subgraph Gitea["Gitea (Bidirectional Mirror)"]
+        G1[Gitea Region 1]
+        G2[Gitea Region 2]
+        G1 <-->|"Mirror"| G2
     end
 
     subgraph Region1["Region 1"]
@@ -163,13 +203,38 @@ flowchart TB
         K8s2[K8s Resources]
     end
 
-    Repo --> Flux1
-    Repo --> Flux2
+    G1 --> Flux1
+    G2 --> Flux2
     Flux1 --> K8s1
     Flux2 --> K8s2
 ```
 
-Each region has its own Flux installation, all pointing to the same Git repositories. Region-specific configuration handled via Kustomize overlays.
+- Each region has its own Flux installation
+- Both Gitea instances mirror repositories bidirectionally
+- Flux in each region pulls from local Gitea
+- Region-specific configuration handled via Kustomize overlays
+
+## Gitea Actions Integration
+
+Gitea Actions can trigger Flux reconciliation:
+
+```yaml
+# .gitea/workflows/notify-flux.yaml
+name: Notify Flux
+on:
+  push:
+    branches: [main]
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Flux reconciliation
+        run: |
+          curl -X POST \
+            -H "Authorization: Bearer ${{ secrets.FLUX_WEBHOOK_TOKEN }}" \
+            https://flux-webhook.<domain>/hook/...
+```
 
 ## Consequences
 
@@ -178,6 +243,8 @@ Each region has its own Flux installation, all pointing to the same Git reposito
 - K8s-native CRDs
 - CLI-focused
 - Works with ESO PushSecrets
+- Seamless Gitea integration
+- Self-hosted Git (no external dependency)
 
 **Negative:**
 - No GUI (use Grafana dashboards)
@@ -185,6 +252,7 @@ Each region has its own Flux installation, all pointing to the same Git reposito
 
 ## Related
 
+- [ADR-GITEA](../../gitea/docs/ADR-GITEA.md)
 - [ADR-SECRETS-MANAGEMENT](../../external-secrets/docs/ADR-SECRETS-MANAGEMENT.md)
 - [ADR-GITOPS-RELEASE-MANAGEMENT](./ADR-GITOPS-RELEASE-MANAGEMENT.md)
 - [SPEC-FLUX-STRUCTURE](./SPEC-FLUX-STRUCTURE.md)

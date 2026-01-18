@@ -11,7 +11,7 @@ flux/
 ├── clusters/
 │   └── contabo-europe/
 │       ├── flux-system/       # Flux controllers
-│       ├── network/           # istio, cilium, stunner
+│       ├── network/           # cilium, stunner, k8gb
 │       ├── security/          # kyverno, external-secrets, cert-manager
 │       ├── database/          # cnpg, mongodb, dragonfly
 │       ├── middleware/        # redpanda
@@ -36,7 +36,7 @@ metadata:
   namespace: flux-system
 spec:
   interval: 1m
-  url: https://github.com/openova-io/cnpg
+  url: https://gitea.<domain>/openova/cnpg
   ref:
     branch: main
 ---
@@ -59,7 +59,7 @@ spec:
 
 | Category | Components | Purpose |
 |----------|------------|---------|
-| network | istio, cilium, stunner | Mesh, CNI, TURN |
+| network | cilium, stunner, k8gb | CNI + Service Mesh, TURN, GSLB |
 | security | kyverno, external-secrets, cert-manager | Policy, secrets, TLS |
 | database | cnpg, mongodb, dragonfly | Database operators |
 | middleware | redpanda | Event streaming |
